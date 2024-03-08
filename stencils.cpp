@@ -24,26 +24,13 @@
 // The 'boilerplate.cpp' is taken from SpiderMonkey embedding examples.
 //
 // To reuse Stencils in multiple threads, you must create a JS::FrontendContext in
-// each thread that compiles Javascript. Spidermonkey 115 ESR requires some modifications.
-// It doesn't expose API to retrieve error messages from FrontendContext objects nor
-// allows cleaning up errors in the context. Subsequent releases of Spidermonkey will
-// have a richer API for that.
+// each thread that compiles Javascript.
 //
 // This example will be in SpiderMonkey embedding examples
 
 // Helper output
 std::ostream &labeled_cout() {
     return std::cout<<"Thread: "<<std::hex<<std::this_thread::get_id()<<" ";
-}
-
-// Helper FrontendContext creator
-JS::FrontendContext *frontend_context()
-{
-    static constexpr size_t kCompileStackQuota = 128 * sizeof(size_t) * 1024;
-    auto *fc = JS::NewFrontendContext();
-    if (fc)
-        JS::SetNativeStackQuota(fc, kCompileStackQuota);
-    return fc;
 }
 
 // Cache of compiled scripts
@@ -74,18 +61,30 @@ private:
 class Job
 {
 public:
-    Job(JSCache &cache) : _cache(cache) {};
+    Job(JSCache &cache);
+    ~Job() {if (_fc) JS::DestroyFrontendContext(_fc);};
 
     void ExecuteScript(JSContext *cx, std::string const &script,
         const char* filename, unsigned long linenumber);
 
 private:
-    RefPtr<JS::Stencil> compile_script(std::string const &script,
+    RefPtr<JS::Stencil> compile_script(JSContext *cx, std::string const &script,
         const char* filename, unsigned long linenumber);
 
 private:
     JSCache &_cache;
+    JS::FrontendContext *_fc;
 };
+
+Job::Job(JSCache &cache)
+    : _cache(cache)
+{
+    static constexpr size_t kCompileStackQuota = 128 * sizeof(size_t) * 1024;
+    _fc = JS::NewFrontendContext();
+    if (_fc)
+        JS::SetNativeStackQuota(_fc, kCompileStackQuota);
+}
+
 
 void Job::ExecuteScript(JSContext *cx, std::string const &script,
         const char* filename, unsigned long linenumber)
@@ -93,60 +92,62 @@ void Job::ExecuteScript(JSContext *cx, std::string const &script,
     JS::RootedScript rscript(cx);
     RefPtr<JS::Stencil> stencil(_cache.find(script));
 
-    if (stencil == nullptr)
-    {
+    if (stencil == nullptr) {
         labeled_cout()<<"Compiling script\n";
-        stencil = compile_script(script, filename, linenumber);
+        stencil = compile_script(cx, script, filename, linenumber);
         if (stencil != nullptr)
             _cache.insert(script, stencil);
     } else {
         labeled_cout()<<"Taking script from cache\n";
     }
 
-    if (stencil != nullptr) {
-        JS::InstantiateOptions instantiateOptions;
-        rscript = JS::InstantiateGlobalStencil(cx, instantiateOptions, stencil);
-        if (!rscript) {
-            boilerplate::ReportAndClearException(cx);
-            return;
-        }
+    if (stencil == nullptr) {
+        boilerplate::ReportAndClearException(cx);
+        return;
+    }
 
-        JS::RootedValue val(cx);
-        if (!JS_ExecuteScript(cx, rscript, &val)) {
-            boilerplate::ReportAndClearException(cx);
-            return;
-        }
+    JS::InstantiateOptions instantiateOptions;
+    rscript = JS::InstantiateGlobalStencil(cx, instantiateOptions, stencil);
+    if (!rscript) {
+        boilerplate::ReportAndClearException(cx);
+        return;
+    }
+
+    JS::RootedValue val(cx);
+    if (!JS_ExecuteScript(cx, rscript, &val)) {
+        boilerplate::ReportAndClearException(cx);
+        return;
     }
 }
 
-RefPtr<JS::Stencil> Job::compile_script(std::string const &script,
+RefPtr<JS::Stencil> Job::compile_script(JSContext *cx, std::string const &script,
     const char* filename, unsigned long linenumber)
 {
     JS::SourceText<mozilla::Utf8Unit> source;
-    auto *fc = frontend_context();
-    if (!fc)
+    if (!_fc)
         return nullptr;
 
-    if (!source.init(fc, script.c_str(), script.size(), JS::SourceOwnership::Borrowed))
-    {
+    JS::CompileOptions opts(cx);
+    opts.setFileAndLine(filename, linenumber);
+    opts.setNonSyntacticScope(true);
+
+    if (!source.init(_fc, script.c_str(), script.size(), JS::SourceOwnership::Borrowed)) {
         labeled_cout()<<"Error initializing JS source\n";
-        JS::DestroyFrontendContext(fc);
+        ConvertFrontendErrorsToRuntimeErrors(cx, _fc, opts);
+        JS::ClearFrontendErrors(_fc);
         return nullptr;
     }
 
-    JS::CompileOptions opts{JS::CompileOptions::ForFrontendContext()};
-    opts.setFileAndLine(filename, linenumber);
-    opts.setNonSyntacticScope(true);
     JS::CompilationStorage compileStorage;
     RefPtr<JS::Stencil> st =
-	    JS::CompileGlobalScriptToStencil(fc, opts, source, compileStorage);
+	    JS::CompileGlobalScriptToStencil(_fc, opts, source, compileStorage);
 
     if (st == nullptr) {
         labeled_cout()<<"Error compiling script, presumably due to a syntax error.\n";
-        //need a better report of the error, but we don't have exposed API
+        ConvertFrontendErrorsToRuntimeErrors(cx, _fc, opts);
+        JS::ClearFrontendErrors(_fc);
     }
 
-    JS::DestroyFrontendContext(fc);
     return st;
 }
 
@@ -174,18 +175,10 @@ bool DefineFunctions(JSContext* cx, JS::Handle<JSObject*> global) {
 
 static void ExecuteExamples(JSContext *cx, Job &job)
 {
-    static char const *js1 = R"js(
-        print(`JS log one: ${new Date()}`);
-        )js";
-
-    // a script with a syntactic error
-    static char const *js2 = R"js(
-        await print(`JS log two: ${new Date()}`);
-        )js";
-
-    static char const *js3 = R"js(
-        print(`JS log three: ${new Date()}`);
-        )js";
+    static int jsline=__LINE__;
+    static char const *js1 = R"js(print(`JS log one: ${new Date()}`);)js";
+    static char const *js2 = R"js(await print(`JS log two: ${new Date()}`);)js";
+    static char const *js3 = R"js(print(`JS log three: ${new Date()}`);)js";
 
     static char const *scripts[] = {js1, js2, js3};
 
@@ -202,10 +195,9 @@ static void ExecuteExamples(JSContext *cx, Job &job)
         return;
     }
 
-    char const *filename = "none";
-    unsigned long linenumber = 0; //should show in error reports
+    unsigned long linenumber = jsline; //for error reports
     for (auto code: scripts) {
-        job.ExecuteScript(cx, code, filename, ++linenumber);
+        job.ExecuteScript(cx, code, __FILE__, ++linenumber);
     }
 }
 

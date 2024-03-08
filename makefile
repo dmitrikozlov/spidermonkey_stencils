@@ -1,11 +1,11 @@
-#SMONKEY=../mozilla-unified/obj-x86_64-pc-linux-gnu/dist
-#SMONKEYLIB=mozjs-124a1
+SMONKEY=../mozilla-unified/obj-x86_64-pc-linux-gnu/dist
+SMONKEYLIB=mozjs-124a1
 
-SMONKEY=../firefox-115.8.0/obj-debug-x86_64-pc-linux-gnu/dist
-SMONKEYLIB=mozjs-115
+#SMONKEY=../firefox-115.8.0/obj-debug-x86_64-pc-linux-gnu/dist
+#SMONKEYLIB=mozjs-115
 
 CC=g++
-CFLAGS=-std=c++17 -D DEBUG -g -I $(SMONKEY)/include/
+CFLAGS=-std=c++17 -D DEBUG -g -I $(SMONKEY)/include
 #ODIR=obj
 OBJS=boilerplate.o stencils.o
 
