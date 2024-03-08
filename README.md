@@ -12,14 +12,14 @@ To compile and run the example, modify the `makefile`.
 Specify a path to the SpiderMonkey distribution:
 
 ```
-SMONKEY=../firefox-115.8.0/obj-debug-x86_64-pc-linux-gnu/dist
+SMONKEY=../mozilla-unified/obj-x86_64-pc-linux-gnu/dist
 ```
 
 and the name of the SpiderMonkey library (omitting the lib prefix):
 
 
 ```
-SMONKEYLIB=mozjs-115
+SMONKEYLIB=mozjs-124a1
 ```
 
 Build:
